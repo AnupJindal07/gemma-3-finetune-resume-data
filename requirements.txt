@@ -1,11 +1,16 @@
---extra-index-url https://download.pytorch.org/whl/cu121
-torch
+# Use --index-url (primary) instead of --extra-index-url (secondary)
+#--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+#torchvision==0.20.1+cu121
+#torchaudio==2.5.1+cu121 
 transformers
-accelerate
-peft
-bitsandbytes
-datasets
 sentence-transformers
+datasets
+peft
+accelerate
+bitsandbytes
+bs4
+
 # sentencepiece
 # for models mistralai/Mistral-7B-Instruct-v0.3
 # protobuf
