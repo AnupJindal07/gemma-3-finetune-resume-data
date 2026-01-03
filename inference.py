@@ -6,7 +6,7 @@ MODEL_NAME = constants.trained_model_path
 
 
 def load_model():
-    """Load the fine-tuned Llama 3.1 8B model and tokenizer."""
+    """Load the fine-tuned Gemma-3-4b-it model and tokenizer."""
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     quantization_config = BitsAndBytesConfig(
@@ -64,7 +64,7 @@ def analyze_resume(resume_text):
             pad_token_id=tokenizer.eos_token_id  # Prevents generation issues
         )
 
-    # print(f"output {output}")
+    print(f"output {output}")
 
     # Decode output
     response_text = tokenizer.decode(output[0], skip_special_tokens=True)

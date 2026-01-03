@@ -1,10 +1,11 @@
-
+--extra-index-url https://download.pytorch.org/whl/cu121
 torch
 transformers
 accelerate
 peft
 bitsandbytes
 datasets
+sentence-transformers
 # sentencepiece
 # for models mistralai/Mistral-7B-Instruct-v0.3
 # protobuf

@@ -31,7 +31,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 # Enable training mode
 model.config.use_cache = False
-
+'''
 config = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -39,6 +39,19 @@ config = LoraConfig(
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM"
+)
+'''
+config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,          # Causal language modeling
+    r=16,                                   # Rank of adaptation
+    lora_alpha=32,                         # LoRA scaling parameter
+    lora_dropout=0.1,                      # LoRA dropout
+    target_modules=[                       # Target modules for Phi-3
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj"
+    ],
+    bias="none",                           # No bias training
+    inference_mode=False                   # Training mode
 )
 
 model = get_peft_model(model, config)
@@ -63,7 +76,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=1,
     gradient_accumulation_steps=4,
     num_train_epochs=3,
-    save_steps=500,
+    save_steps=50,
     save_total_limit=2,
     logging_dir="logs",
     logging_steps=10,

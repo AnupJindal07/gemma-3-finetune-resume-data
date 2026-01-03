@@ -5,6 +5,7 @@ models/fine_tuned_llama_resume/
 *.bin
 *.pkl
 
+.venv/
 # Ignore dataset cache
 data/raw_data/
 data/processed_data/
