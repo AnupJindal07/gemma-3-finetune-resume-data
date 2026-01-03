@@ -2,7 +2,7 @@ from datetime import datetime
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, BitsAndBytesConfig, DataCollatorForLanguageModeling
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import torch
 import constants
 
@@ -32,6 +32,10 @@ model = AutoModelForCausalLM.from_pretrained(
 
 # Enable training mode
 model.config.use_cache = False
+
+# Prepare model for k-bit training BEFORE applying LoRA
+model = prepare_model_for_kbit_training(model)
+
 '''
 config = LoraConfig(
     r=8,
@@ -47,7 +51,7 @@ config = LoraConfig(
     r=16,                                   # Rank of adaptation
     lora_alpha=32,                         # LoRA scaling parameter
     lora_dropout=0.1,                      # LoRA dropout
-    target_modules=[                       # Target modules for Phi-3
+    target_modules=[                       # Target modules for Gemma-3
         "q_proj", "k_proj", "v_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj"
     ],
@@ -56,6 +60,9 @@ config = LoraConfig(
 )
 
 model = get_peft_model(model, config)
+
+# Print LoRA info to verify it's working
+model.print_trainable_parameters()
 
 dataset = load_dataset("json", data_files={"train": constants.process_file_path})
 
@@ -121,16 +128,25 @@ def tokenize_function(examples):
         
         labels.append(label_seq)
     
+    # Debug: print first example
+    if len(labels) > 0:
+        non_masked_count = sum(1 for x in labels[0] if x != -100)
+        print(f"Debug: First example has {non_masked_count} non-masked tokens to learn from")
+    
     tokenized["labels"] = labels
     return tokenized
 
 # Apply tokenization
 tokenized_datasets = dataset.map(tokenize_function, batched=True)
 
-# Data collator for causal language modeling
-data_collator = DataCollatorForLanguageModeling(
+# Remove the original text columns that are causing issues
+tokenized_datasets = tokenized_datasets.remove_columns(["prompt", "response"])
+
+# Don't use DataCollatorForLanguageModeling as it interferes with our custom labels
+# Use a simple data collator that just handles padding
+from transformers import DataCollatorWithPadding
+data_collator = DataCollatorWithPadding(
     tokenizer=tokenizer,
-    mlm=False,  # We're doing causal LM, not masked LM
     return_tensors="pt"
 )
 
@@ -144,6 +160,11 @@ training_args = TrainingArguments(
     logging_dir="logs",
     logging_steps=10,
     report_to="none",
+    learning_rate=2e-4,  # Higher learning rate for LoRA
+    warmup_steps=10,
+    max_grad_norm=1.0,   # Gradient clipping
+    dataloader_pin_memory=False,  # Reduce memory pressure
+    remove_unused_columns=False,  # Keep all columns including labels
 )
 
 trainer = Trainer(
