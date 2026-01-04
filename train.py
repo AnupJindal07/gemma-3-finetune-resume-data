@@ -143,14 +143,14 @@ tokenized_datasets = dataset.map(tokenize_function, batched=True)
 tokenized_datasets = tokenized_datasets.remove_columns(["prompt", "response"])
 
 # Split into train and eval datasets (85-15 ratio)
-train_eval_split = tokenized_datasets["train"].train_test_split(test_size=0.15, seed=42)
+train_eval_split = tokenized_datasets["train"].train_test_split(test_size=0.20, seed=42)
 train_dataset = train_eval_split["train"]
 eval_dataset = train_eval_split["test"]
 
 print(f"Train dataset size: {len(train_dataset)}")
 print(f"Eval dataset size: {len(eval_dataset)}")
-batch_size = 4
-gradient_accumulation_steps = 16
+batch_size = 2
+gradient_accumulation_steps = 32
 num_epochs = 3
 
 

@@ -11,7 +11,7 @@ experience - Number of years of experience.
 education - Educational background.
 resume_text - A detailed, unstructured, realistic, and diverse resume summary.
 Guidelines for resume_text generation:
-The length should be much longer, between 100 and 300 words.
+The length should be much longer, between 200 and 400 words.
 Include a random real name for demo.
 The format should vary across resumes to reflect real-world diversity in resume writing styles.
 Use different sections and different labels that look like a real resume.
