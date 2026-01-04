@@ -26,7 +26,7 @@ quantization_config = BitsAndBytesConfig(
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map="auto",
-    torch_dtype=torch.float16,
+    dtype=torch.float16,
     quantization_config=quantization_config,
 )
 
@@ -96,7 +96,7 @@ def tokenize_function(examples):
         formatted_texts, 
         padding="max_length", 
         truncation=True, 
-        max_length=512,
+        max_length=2048,
         return_tensors=None
     )
     
@@ -142,6 +142,18 @@ tokenized_datasets = dataset.map(tokenize_function, batched=True)
 # Remove the original text columns that are causing issues
 tokenized_datasets = tokenized_datasets.remove_columns(["prompt", "response"])
 
+# Split into train and eval datasets (85-15 ratio)
+train_eval_split = tokenized_datasets["train"].train_test_split(test_size=0.15, seed=42)
+train_dataset = train_eval_split["train"]
+eval_dataset = train_eval_split["test"]
+
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Eval dataset size: {len(eval_dataset)}")
+batch_size = 4
+gradient_accumulation_steps = 16
+num_epochs = 3
+
+
 # Don't use DataCollatorForLanguageModeling as it interferes with our custom labels
 # Use a simple data collator that just handles padding
 from transformers import DataCollatorWithPadding
@@ -152,28 +164,56 @@ data_collator = DataCollatorWithPadding(
 
 training_args = TrainingArguments(
     output_dir=constants.model_checkpoint_path,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    num_train_epochs=3,
-    save_steps=50,
-    save_total_limit=2,
-    logging_dir="logs",
-    logging_steps=10,
-    report_to="none",
+    per_device_train_batch_size=batch_size,
+    per_device_eval_batch_size=batch_size*2,
+    gradient_accumulation_steps=gradient_accumulation_steps, 
+    num_train_epochs=num_epochs,
     learning_rate=2e-4,  # Higher learning rate for LoRA
-    warmup_steps=10,
+    weight_decay=0.01,
+    warmup_steps=20,
+    
+    logging_dir="logs",
+    logging_steps=20,
+
+    eval_steps=20,
+    eval_strategy="steps",
+    save_steps=20,
+    save_total_limit=4,
+    load_best_model_at_end=True,
     max_grad_norm=1.0,   # Gradient clipping
-    dataloader_pin_memory=False,  # Reduce memory pressure
-    remove_unused_columns=False,  # Keep all columns including labels
+    #metric_for_best_model="eval_loss",
+    greater_is_better=False, 
+    fp16=False,                      # Use bfloat16 instead
+    bf16=True,                       # Better for modern GPUs
+    dataloader_pin_memory=False,     # Save memory, Reduce memory pressure
+    gradient_checkpointing=True,     # Trade compute for memory
+    remove_unused_columns=False,     # Keep all columns including labels
+    report_to=None,                  # Disable logging to avoid conflicts
+    run_name=f"gemma-3-4b-resume-qlora-{batch_size}bs-{num_epochs}ep",
+    seed=42,
+    #torch_compile=False,             # Disable torch compile for compatibility
+    #dataloader_num_workers=0,        # Single-threaded data loading for stability
+)
+
+from transformers import EarlyStoppingCallback
+# Configure a callback to stop training if the evaluation loss
+# doesn't improve for 3 consecutive evaluations.
+early_stopping = EarlyStoppingCallback(
+    early_stopping_patience=3,
+    early_stopping_threshold=0.01
 )
 
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized_datasets["train"],
-    tokenizer=tokenizer,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    #tokenizer=tokenizer,
     data_collator=data_collator,
+    callbacks=[early_stopping]  
 )
+
+
 
 if __name__ == "__main__":
     print(f"Started training at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
