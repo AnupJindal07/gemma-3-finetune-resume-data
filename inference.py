@@ -2,6 +2,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndB
 import torch
 import constants
 import os
+import logging
+from typing import List, Optional, Tuple 
+import re
 
 # Set environment variables for debugging CUDA issues
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -9,12 +12,15 @@ os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
 MODEL_NAME = constants.finetuned_model_name
 
+logger = logging.getLogger(__name__)
 
 # Global variables to cache model and tokenizer
 _model = None
 _tokenizer = None
 
-def load_model():
+
+
+def load_model(model_name: str, device: str):
     """Load the fine-tuned Gemma-3-4b-it model and tokenizer."""
     global _model, _tokenizer
     
@@ -23,145 +29,246 @@ def load_model():
     
     print("Loading model and tokenizer...")
     
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    logger.info(f"Loading chat model: {model_name}")
     
-    # Set pad token if not present (common issue with Gemma models)
+    # Load tokenizer
+    _tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
     if _tokenizer.pad_token is None:
         _tokenizer.pad_token = _tokenizer.eos_token
-
-    try:
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,  # Use 4-bit quantization
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-        )
-
-        _model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            quantization_config=quantization_config,
-            trust_remote_code=True  # Add this for Gemma models
-        )
-        
-        print(f"Model loaded successfully on device: {_model.device}")
-        
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        # Fallback to CPU if GPU loading fails
-        print("Attempting to load on CPU...")
-        _model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.float32,
-            device_map="cpu",
-            trust_remote_code=True
-        )
-        
+    
+    # Load model
+    load_kwargs = dict(device_map="auto", dtype=torch.bfloat16)
+    _model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+    _model.eval()
+    
+    logger.info(f"Chat model loaded successfully")
     return _model, _tokenizer
 
-
-def analyze_resume(resume_text):
-    """Generate AI-based resume analysis output."""
-    model, tokenizer = load_model()
-
-    # Ensure model is in evaluation mode
-    model.eval()
-
-    prompt = f"""Below is a resume. Analyze it and provide a structured response.
-
-### Resume:
-{resume_text}
-
-### Response:"""
-
-    # Check if CUDA is available
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-
-    try:
-        # Tokenize input with proper padding and attention mask
-        inputs = tokenizer(
-            prompt, 
-            return_tensors="pt", 
-            truncation=True, 
-            max_length=512,
-            padding=True,
-            add_special_tokens=True
-        )
+class GemmaChatService:
+    """Service for chat completions using Gemma model - loads once and reuses"""
+    
+    def __init__(self, 
+                 model_name: str = constants.finetuned_model_name, 
+                 device: Optional[str] = None,
+                 max_new_tokens: int = 2048,
+                 temperature: float = 0.2,
+                 top_p: float = 0.95):
+        """
+        Initialize the Gemma chat service.
         
-        print(f"Input token IDs shape: {inputs['input_ids'].shape}")
-        print(f"Input token IDs: {inputs['input_ids']}")
+        Args:
+            model_name: Name or path of the Gemma model on HuggingFace
+            device: Device to run the model on ('cpu', 'cuda', 'mps', or None for auto-detection)
+            max_new_tokens: Maximum number of new tokens to generate
+            temperature: Sampling temperature
+            top_p: Top-p (nucleus) sampling parameter
+        """
+        self.model_name = model_name
+        self.device = self._get_device(device)
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.top_p = top_p
         
-        # Check for invalid token IDs
-        if torch.any(inputs['input_ids'] < 0) or torch.any(inputs['input_ids'] >= tokenizer.vocab_size):
-            print("Warning: Invalid token IDs detected!")
-            # Clean invalid tokens
-            inputs['input_ids'] = torch.clamp(inputs['input_ids'], 0, tokenizer.vocab_size - 1)
+        # Initialize model and tokenizer
+        self.model = None
+        self.tokenizer = None
         
-        # Move tensors to device safely
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        # Generate response
-        with torch.no_grad():
-            print("Starting generation...")
+        # Load the model
+        self._load_model()
+    
+    def _get_device(self, device: Optional[str]) -> str:
+        """
+        Determine the appropriate device for model inference.
+        
+        Args:
+            device: Specified device or None for auto-detection
             
-            output = model.generate(
-                input_ids=inputs['input_ids'],
-                attention_mask=inputs['attention_mask'],
-                max_new_tokens=512,  # Reduced for safety
-                do_sample=False,  # Start with greedy decoding for debugging
-                temperature=1.0,  # Reset to default
-                num_return_sequences=1,
-                pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                use_cache=True
-            )
-            
-    except Exception as e:
-        print(f"Error during generation: {e}")
-        print("Attempting CPU fallback...")
+        Returns:
+            Device string ('cuda', 'mps', or 'cpu')
+        """
+        if device:
+            return device
         
-        # Fallback to CPU
+        if torch.cuda.is_available():
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            return "cuda"
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            return "mps"
+        else:
+            return "cpu"
+    
+    def _load_model(self):
+        """Load the Gemma model and tokenizer using cached loading function"""
         try:
-            inputs = tokenizer(
-                prompt, 
-                return_tensors="pt", 
-                truncation=True, 
-                max_length=512,
-                padding=True
-            ).to("cpu")
+            self.model, self.tokenizer = load_model(self.model_name, self.device)
+            logger.info(f"Chat completion service initialized successfully")
             
-            # Move model to CPU for fallback
-            if hasattr(model, 'cpu'):
-                model = model.cpu()
+        except Exception as e:
+            logger.error(f"Error loading chat model {self.model_name}: {str(e)}")
+            raise
+    
+    def build_prompt_from_query(self, query: str, contexts: List[dict] = None) -> str:
+        """
+        Method 1: Generate a proper prompt from a query
+        
+        Args:
+            query: User query/question
+            contexts: Optional list of context documents
+            
+        Returns:
+            Formatted prompt string
+        """
+        if contexts:
+            ctx = "\n\n".join([
+                f"[{c.get('meta', {}).get('source', 'Unknown')}] {c.get('doc', str(c))}" 
+                for c in contexts
+            ])
+            prompt = (
+                f"<system>You are a helpful assistant. Use the provided context to answer the user's question accurately.</system>\n"
+                f"<user>Question: {query}\n\nContext:\n{ctx}</user>\n<assistant>"
+            )
+        else:
+            prompt = f"<system>You are a helpful assistant.</system>\n<user>{query}</user>\n<assistant>"
+        
+        return prompt
+    
+    def build_prompt_with_system_context(self, system_context: str, user_query: str) -> str:
+        """
+        Method 1b: Generate a prompt with custom system context and user query
+        
+        Args:
+            system_context: Custom system context/instructions
+            user_query: User query/question
+            
+        Returns:
+            Formatted prompt string
+        """
+        prompt = f"<system>{system_context}</system>\n<user>{user_query}</user>\n<assistant>"
+        return prompt
+    
+    def generate_response_from_prompt(self, prompt: str, max_new_tokens: int=1024) -> str:
+        """
+        Method 2: Generate response from a given prompt
+        
+        Args:
+            prompt: Complete formatted prompt
+            
+        Returns:
+            Generated response text
+        """
+        if not prompt.strip():
+            logger.warning("Empty prompt provided for completion")
+            return "Sorry, I received an empty prompt."
+        if max_new_tokens <= 0:
+            logger.warning("Invalid max_new_tokens provided, using default value")
+            max_new_tokens = self.max_new_tokens
+
+        try:
+            inputs = self.tokenizer(
+                prompt, 
+                return_tensors="pt" #,
+                #truncation=True,
+                #max_length=max_length  # Limit input length
+            ).to(self.device)
             
             with torch.no_grad():
-                output = model.generate(
+                outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=512,
-                    do_sample=False,
-                    num_return_sequences=1,
-                    pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
-                    eos_token_id=tokenizer.eos_token_id
+                    max_new_tokens=max_new_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    repetition_penalty=1.1
                 )
-        except Exception as cpu_error:
-            print(f"CPU fallback also failed: {cpu_error}")
-            return "Error occurred during inference"
+            
+            # Decode and extract only the assistant's response
+            full_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            match = re.search(r"<assistant>(.*?)</assistant>", full_response, re.DOTALL)
+            if match:
+                assistant_response = match.group(1).strip()
+            else:
+                assistant_response = full_response.split("<assistant>")[-1].strip()
+            
+            return assistant_response
+            
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            return "Sorry, I encountered an error while generating the response."
+    
+    def chat_complete(self, query: str, contexts: List[dict] = None) -> Tuple[str, str]:
+        """
+        Convenience method that combines both: generate prompt and response
+        
+        Args:
+            query: User query
+            contexts: Optional context documents
+            
+        Returns:
+            Tuple of (prompt, response)
+        """
+        prompt = self.build_prompt_from_query(query, contexts)
+        response = self.generate_response_from_prompt(prompt)
+        return prompt, response
+    
+    def chat_completion(self, system_context: str, user_query: str, max_new_tokens: int=1024) -> Tuple[str, str]:
+        """
+        Convenience method that combines both: generate prompt and response
+        
+        Args:
+            query: User query
+            contexts: Optional context documents
+            
+        Returns:
+            Tuple of (prompt, response)
+        """
+        prompt = self.build_prompt_with_system_context(system_context, user_query)
+        response = self.generate_response_from_prompt(prompt)
+        return prompt, response
+    
+    def get_model_info(self) -> dict:
+        """
+        Get information about the loaded model.
+        
+        Returns:
+            Dictionary containing model information
+        """
+        return {
+            "model_name": self.model_name,
+            "device": self.device,
+            "max_new_tokens": self.max_new_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "model_loaded": self.model is not None,
+            "tokenizer_loaded": self.tokenizer is not None
+        }
 
-    print(f"Generated output shape: {output.shape}")
-    print(f"Generated tokens: {output}")
 
-    # Decode output
-    response_text = tokenizer.decode(output[0], skip_special_tokens=True)
-    print(f"Generated response_text: {response_text}")
+# Global instance for easy access
+_chat_service = None 
 
-    # Return only the generated content (remove the input prompt from output)
-    return response_text.replace(prompt, "").strip()
-
-
-# if __name__ == "__main__":
-#     resume_text = sys.argv[1] if len(sys.argv) > 1 else "Sample resume text here."
-#     print(analyze_resume(resume_text))
+def get_chat_service(model_name: Optional[str] = None, **kwargs) -> GemmaChatService:
+    """
+    Get or create a global chat service instance.
+    
+    Args:
+        model_name: Name of the model to use (only used on first call)
+        **kwargs: Additional arguments for GemmaChatService
+        
+    Returns:
+        Global chat service instance
+    """
+ 
+    global _chat_service
+    if _chat_service is None:
+        _chat_service = GemmaChatService(
+            model_name=model_name ,
+            **kwargs
+        )
+    return _chat_service
+     
 
 if __name__ == "__main__":
     # test_resume = """
@@ -190,6 +297,26 @@ if __name__ == "__main__":
     Technical Skills:
     Docker, Spring Boot, Microservices, REST APIs, Python, Java
     """
+    try:
+        # Initialize the service
+        chat_service = GemmaChatService(
+            model_name=MODEL_NAME,
+            device=None  # Auto-detect device
+        )
+        
+        # Example usage
+        test_query = "What is machine learning?"
+        
+        # Method 1: Build prompt then generate response
+        prompt = chat_service.build_prompt_from_query(test_query)
+        print(f"Generated Prompt:\n{prompt}\n")
+        
+        response = chat_service.generate_response_from_prompt(prompt, max_new_tokens=256)
+        print(f"Generated Response:\n{response}\n")
 
-    result = analyze_resume(test_resume)
-    print(result)
+        prompt2, response2 = chat_service.chat_completion("You are a helpful assistant. Analysis the input resume and provide feedback.", test_resume)
+        print(f"Complete Chat Response:\n{response2}\n")
+
+    except Exception as e:
+        logger.error(f"Error in example usage: {str(e)}")
+
