@@ -3,11 +3,14 @@ You are an expert technical recruiter.
 Given the following resume content, generate a concise professional summary of the candidate.
 
 Guidelines:
-- Use 3–5 bullet points
+- Use 5-8 bullet points
 - Focus on core skills, experience level, and domain expertise
 - Do NOT invent job titles, companies, or years of experience
 - Do NOT add metrics unless explicitly present
+- Accurately reflects roles, seniority, and responsibilities
+- Avoids exaggeration
 - Use neutral, recruiter-friendly language
+- Uses cautious language when details are unclear
 
 Resume:
 {resume_text}
