@@ -150,8 +150,8 @@ eval_dataset = train_eval_split["test"]
 print(f"Train dataset size: {len(train_dataset)}")
 print(f"Eval dataset size: {len(eval_dataset)}")
 
-print(f"First train example: {train_dataset[0]}")  # Print first example for verification
-print(f"First eval example: {eval_dataset[0]}")  # Print first example for verification
+#print(f"First train example: {train_dataset[0]}")  # Print first example for verification
+#print(f"First eval example: {eval_dataset[0]}")  # Print first example for verification
 
 batch_size = 2
 gradient_accumulation_steps = 32
