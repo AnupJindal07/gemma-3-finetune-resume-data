@@ -14,10 +14,10 @@ def preprocess_dataset(csv_path, output_path):
     training_data = []
 
     for _, row in df.iterrows():
-        prompt = f"Analyze this resume and extract key details:\n\n{row['resume_text']}"
+        prompt = f"Analyze this resume, Extract the extract key details from the resume and provide a summary, matched roles, and analysis notes:\n\n{row['resume_text']}"
         response = {
             "summary": f"Skills: {row['skills']}\nExperience: {row['experience']} years\nEducation: {row['education']}",
-            "matched_roles": row['job_role'],
+            "matched_roles": row['job_role'], "analysis_notes": row['professional_summary'],
         }
         training_data.append({"prompt": prompt, "response": json.dumps(response)})
 

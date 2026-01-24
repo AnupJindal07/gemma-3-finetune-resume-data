@@ -8,7 +8,7 @@ models/fine_tuned_llama_resume/
 .venv/
 # Ignore dataset cache
 data/raw_data/
-data/processed_data/
+#data/processed_data/
 __pycache__/
 
 # Ignore Jupyter Notebook checkpoints
