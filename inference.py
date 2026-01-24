@@ -2,7 +2,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndB
 import torch
 import constants
 
-MODEL_NAME = constants.trained_model_path
+MODEL_NAME = constants.finetuned_model_name
 
 
 def load_model():
@@ -56,7 +56,7 @@ def analyze_resume(resume_text):
     with torch.no_grad():
         output = model.generate(
             **inputs,
-            max_length=512,  # Adjust based on expected output size
+            max_length=1024,  # Adjust based on expected output size
             do_sample=True,  # Enable sampling for creative outputs
             temperature=0.7,  # Controls randomness
             top_p=0.9,  # Nucleus sampling for diverse results
